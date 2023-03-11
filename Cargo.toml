@@ -22,7 +22,6 @@ pollster = "0.3.0"
 wasm-bindgen-test = "0.3.34"
 bytemuck = { version = "1.13.1", features = ["derive"] }
 noise = "0.8.2"
-wasm-timer = "0.2.5"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 console_error_panic_hook = "0.1.6"

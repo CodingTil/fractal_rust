@@ -1,5 +1,4 @@
 use std::iter;
-use wasm_timer::SystemTime;
 
 use wgpu::util::DeviceExt;
 use winit::{
@@ -116,7 +115,7 @@ struct State {
 	fractal_uniform: FractalUniform,
 	fractal_uniform_buffer: wgpu::Buffer,
 	fractal_uniform_bind_group: wgpu::BindGroup,
-	start_time: SystemTime,
+	start_time: f32,
 	window: Window,
 }
 
@@ -313,7 +312,7 @@ impl State {
 		});
 		let num_indices = INDICES.len() as u32;
 
-		let start_time = SystemTime::now();
+		let start_time = 0.0;
 
 		Self {
 			surface,
@@ -362,8 +361,8 @@ impl State {
 	}
 
 	fn update(&mut self) {
-		// elapsed() broken, see https://github.com/tomaka/wasm-timer/pull/16
-		let elapsed = self.start_time.duration_since(self.start_time).unwrap().as_secs_f32();
+		let elapsed = 1.0_f32 / 60.0_f32 + self.start_time;
+		self.start_time = elapsed;
 
 		let current_c_real = self.fractal_uniform.c_real;
 		let current_c_imag = self.fractal_uniform.c_imag;
@@ -451,7 +450,7 @@ pub async fn run() {
 		// Winit prevents sizing with CSS, so we have to set
 		// the size manually when on web.
 		use winit::dpi::PhysicalSize;
-		window.set_inner_size(PhysicalSize::new(450, 400));
+		window.set_inner_size(PhysicalSize::new(1000, 600));
 
 		use winit::platform::web::WindowExtWebSys;
 		web_sys::window()
