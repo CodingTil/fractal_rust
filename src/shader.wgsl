@@ -58,13 +58,18 @@ fn compute_iterations_smooth(z0: vec2<f32>, c: vec2<f32>, max_iterations: u32) -
 }
 
 // Color gradient
-fn color_gradient(iterations: f32, max_iterations: u32) -> vec4<f32> {
-	// iterations == 0 -> white, iterations == max_iterations -> black
-	let t = iterations / f32(max_iterations);
-	let r = t;
-	let g = t;
-	let b = t;
-	return vec4<f32>(r, g, b, 1.0);
+fn colorGradient(x: f32) -> vec4<f32> {
+	// Define the colors at each end of the gradient
+	let blue = vec4<f32>(0.0, 0.0, 1.0, 1.0);
+	let green = vec4<f32>(0.0, 1.0, 0.0, 1.0);
+	let red = vec4<f32>(1.0, 0.0, 0.0, 1.0);
+
+	// Determine where the color should be on the gradient
+	let blueToGreen = mix(blue, green, x);
+	let greenToRed = mix(green, red, x);
+
+	// Return the final color
+	return mix(blueToGreen, greenToRed, x);
 }
 
 // Fragment shader
@@ -76,5 +81,5 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 	let z = vec2<f32>(x, y);
 	let c = vec2<f32>(fractal_parameters.c_real, fractal_parameters.c_imag);
 	let iterations = compute_iterations_smooth(z, c, fractal_parameters.max_iterations);
-	return color_gradient(iterations, fractal_parameters.max_iterations);
+	return colorGradient(f32(iterations) / f32(fractal_parameters.max_iterations));
 }

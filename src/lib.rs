@@ -215,7 +215,7 @@ impl State {
 			}],
 		});
 
-		let fractal_uniform = FractalUniform::new(100, [0.0, 0.0]);
+		let fractal_uniform = FractalUniform::new(35, [-0.8, 0.156]);
 		let fractal_uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
 			label: Some("fractal_uniform_buffer"),
 			contents: bytemuck::cast_slice(&[fractal_uniform]),
