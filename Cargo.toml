@@ -6,10 +6,11 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [lib]
+name = "fractal_rust"
 crate-type = ["cdylib", "rlib"]
 
 [[bin]]
-name = "fractal_rust"
+name = "fractal_rust_bin"
 path = "src/main.rs"
 
 [dependencies]
