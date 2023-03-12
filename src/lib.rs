@@ -535,7 +535,9 @@ pub async fn run_with_html_element(element: &web_sys::Element) {
 		// Winit prevents sizing with CSS, so we have to set
 		// the size manually when on web.
 		use winit::dpi::PhysicalSize;
-		window.set_inner_size(PhysicalSize::new(1000, 600));
+		let element_width = element.client_width() as u32;
+		let element_height = element.client_height() as u32;
+		window.set_inner_size(PhysicalSize::new(element_width, element_height));
 
 		use winit::platform::web::WindowExtWebSys;
 		let canvas = web_sys::Element::from(window.canvas());
