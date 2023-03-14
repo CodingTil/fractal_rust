@@ -472,7 +472,7 @@ impl State {
 							b: 1.0,
 							a: 1.0,
 						}),
-						store: true,
+						store: false,
 					},
 				})],
 				depth_stencil_attachment: None,
