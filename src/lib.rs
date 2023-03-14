@@ -1,7 +1,13 @@
 use std::iter;
 
+#[cfg(target_arch = "wasm32")]
+use web_sys::HtmlCanvasElement;
+#[cfg(target_arch = "wasm32")]
+use winit::dpi::LogicalSize;
+
 use wgpu::util::DeviceExt;
 use winit::{
+	dpi::PhysicalSize,
 	event::*,
 	event_loop::{ControlFlow, EventLoop},
 	window::{Window, WindowBuilder},
@@ -116,16 +122,19 @@ struct State {
 	window: Window,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl State {
 	async fn new(window: Window) -> Self {
-		let size = window.inner_size();
+		let instance = State::create_instance();
+		let (surface, size) = State::create_surface(&instance, &window);
+		State::init(instance, window, surface, size).await
+	}
 
-		// The instance is a handle to our GPU
-		// BackendBit::PRIMARY => Vulkan + Metal + DX12 + Browser WebGPU
-		let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-			backends: wgpu::Backends::all(),
-			dx12_shader_compiler: Default::default(),
-		});
+	fn create_surface(
+		instance: &wgpu::Instance,
+		window: &Window,
+	) -> (wgpu::Surface, PhysicalSize<u32>) {
+		let size = window.inner_size();
 
 		// # Safety
 		//
@@ -133,6 +142,58 @@ impl State {
 		// State owns the window so this should be safe.
 		let surface = unsafe { instance.create_surface(&window) }.unwrap();
 
+		(surface, size)
+	}
+}
+
+#[cfg(target_arch = "wasm32")]
+impl State {
+	async fn new(canvas: HtmlCanvasElement, event_loop: &EventLoop<()>) -> Self {
+		let (width, height) = (canvas.client_width(), canvas.client_height());
+		let instance = State::create_instance();
+		let (surface, size) = State::create_surface(&instance, &canvas);
+		use winit::platform::web::WindowBuilderExtWebSys;
+		let window = WindowBuilder::new()
+			.with_canvas(Some(canvas))
+			.build(&event_loop)
+			.map(|w| {
+				// Set initial view port -- ** This isn't what we want! **
+				// We want the canvas to always fit to the document.
+				w.set_inner_size(LogicalSize::new(width, height));
+				w
+			})
+			.expect("Could not build window");
+		State::init(instance, window, surface, size).await
+	}
+
+	fn create_surface(
+		instance: &wgpu::Instance,
+		canvas: &HtmlCanvasElement,
+	) -> (wgpu::Surface, PhysicalSize<u32>) {
+		let size = PhysicalSize::new(canvas.client_width() as u32, canvas.client_height() as u32);
+
+		let surface = instance.create_surface_from_canvas(canvas).unwrap();
+
+		(surface, size)
+	}
+}
+
+impl State {
+	fn create_instance() -> wgpu::Instance {
+		// The instance is a handle to our GPU
+		// BackendBit::PRIMARY => Vulkan + Metal + DX12 + Browser WebGPU
+		wgpu::Instance::new(wgpu::InstanceDescriptor {
+			backends: wgpu::Backends::all(),
+			dx12_shader_compiler: Default::default(),
+		})
+	}
+
+	async fn init(
+		instance: wgpu::Instance,
+		window: Window,
+		surface: wgpu::Surface,
+		size: PhysicalSize<u32>,
+	) -> Self {
 		let adapter = instance
 			.request_adapter(&wgpu::RequestAdapterOptions {
 				power_preference: wgpu::PowerPreference::default(),
@@ -397,6 +458,7 @@ impl State {
 		{
 			let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
 				label: Some("Render Pass"),
+				//TODO: Remove the clearing of the screen
 				color_attachments: &[Some(wgpu::RenderPassColorAttachment {
 					view: &view,
 					resolve_target: None,
@@ -428,7 +490,7 @@ impl State {
 	}
 }
 
-pub async fn run() {
+fn init_logging() {
 	cfg_if::cfg_if! {
 		if #[cfg(target_arch = "wasm32")] {
 			std::panic::set_hook(Box::new(console_error_panic_hook::hook));
@@ -437,33 +499,15 @@ pub async fn run() {
 			env_logger::init();
 		}
 	}
+}
 
-	let event_loop = EventLoop::new();
+#[cfg(not(target_arch = "wasm32"))]
+fn create_window(event_loop: &EventLoop<()>) -> Window {
 	let window = WindowBuilder::new().build(&event_loop).unwrap();
+	window
+}
 
-	#[cfg(target_arch = "wasm32")]
-	{
-		// Winit prevents sizing with CSS, so we have to set
-		// the size manually when on web.
-		use winit::dpi::PhysicalSize;
-		window.set_inner_size(PhysicalSize::new(1000, 600));
-		window.set_resizable(true);
-
-		use winit::platform::web::WindowExtWebSys;
-		web_sys::window()
-			.and_then(|win| win.document())
-			.and_then(|doc| {
-				let dst = doc.get_element_by_id("wasm-block")?;
-				let canvas = web_sys::Element::from(window.canvas());
-				dst.append_child(&canvas).ok()?;
-				Some(())
-			})
-			.expect("Couldn't append canvas to document body.");
-	}
-
-	// State::new uses async code, so we're going to wait for it to finish
-	let mut state = State::new(window).await;
-
+fn run_loop(mut state: State, event_loop: EventLoop<()>) -> ! {
 	event_loop.run(move |event, _, control_flow| {
 		match event {
 			Event::WindowEvent {
@@ -517,89 +561,33 @@ pub async fn run() {
 	});
 }
 
-#[cfg(target_arch = "wasm32")]
-pub async fn run_with_html_element(element: &web_sys::Element) {
-	cfg_if::cfg_if! {
-		if #[cfg(target_arch = "wasm32")] {
-			std::panic::set_hook(Box::new(console_error_panic_hook::hook));
-			console_log::init_with_level(log::Level::Warn).expect("Could't initialize logger");
-		} else {
-			env_logger::init();
-		}
-	}
-
+#[cfg(not(target_arch = "wasm32"))]
+pub async fn run() -> ! {
+	init_logging();
 	let event_loop = EventLoop::new();
-	let window = WindowBuilder::new().build(&event_loop).unwrap();
+	let window = create_window(&event_loop);
+	let state = State::new(window).await;
+	run_loop(state, event_loop)
+}
 
-	#[cfg(target_arch = "wasm32")]
-	{
-		// Winit prevents sizing with CSS, so we have to set
-		// the size manually when on web.
-		use winit::dpi::PhysicalSize;
-		let element_width = element.client_width() as u32;
-		let element_height = element.client_height() as u32;
-		window.set_inner_size(PhysicalSize::new(element_width, element_height));
-		window.set_resizable(true);
+#[cfg(target_arch = "wasm32")]
+pub async fn run() -> ! {
+	init_logging();
+	let event_loop = EventLoop::new();
+	use wasm_bindgen::JsCast;
+	let canvas = web_sys::window()
+		.and_then(|w| w.document())
+		.and_then(|d| d.get_element_by_id("wasm-block"))
+		.map(|e| e.unchecked_into::<HtmlCanvasElement>())
+		.expect("Canvas not found");
+	let state = State::new(canvas, &event_loop).await;
+	run_loop(state, event_loop)
+}
 
-		use winit::platform::web::WindowExtWebSys;
-		let canvas = web_sys::Element::from(window.canvas());
-		element
-			.append_child(&canvas)
-			.expect("Couldn't append canvas to document body.");
-	}
-
-	// State::new uses async code, so we're going to wait for it to finish
-	let mut state = State::new(window).await;
-
-	event_loop.run(move |event, _, control_flow| {
-		match event {
-			Event::WindowEvent {
-				ref event,
-				window_id,
-			} if window_id == state.window().id() => {
-				if !state.input(event) {
-					match event {
-						WindowEvent::CloseRequested
-						| WindowEvent::KeyboardInput {
-							input:
-								KeyboardInput {
-									state: ElementState::Pressed,
-									virtual_keycode: Some(VirtualKeyCode::Escape),
-									..
-								},
-							..
-						} => *control_flow = ControlFlow::Exit,
-						WindowEvent::Resized(physical_size) => {
-							state.resize(*physical_size);
-						}
-						WindowEvent::ScaleFactorChanged { new_inner_size, .. } => {
-							// new_inner_size is &mut so w have to dereference it twice
-							state.resize(**new_inner_size);
-						}
-						_ => {}
-					}
-				}
-			}
-			Event::RedrawRequested(window_id) if window_id == state.window().id() => {
-				state.update();
-				match state.render() {
-					Ok(_) => {}
-					// Reconfigure the surface if it's lost or outdated
-					Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
-						state.resize(state.size)
-					}
-					// The system is out of memory, we should probably quit
-					Err(wgpu::SurfaceError::OutOfMemory) => *control_flow = ControlFlow::Exit,
-					// We're ignoring timeouts
-					Err(wgpu::SurfaceError::Timeout) => log::warn!("Surface timeout"),
-				}
-			}
-			Event::MainEventsCleared => {
-				// RedrawRequested will only trigger once, unless we manually
-				// request it.
-				state.window().request_redraw();
-			}
-			_ => {}
-		}
-	});
+#[cfg(target_arch = "wasm32")]
+pub async fn run_with_canvas(canvas: HtmlCanvasElement) -> ! {
+	init_logging();
+	let event_loop = EventLoop::new();
+	let state = State::new(canvas, &event_loop).await;
+	run_loop(state, event_loop)
 }

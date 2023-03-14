@@ -1,5 +1,7 @@
 # Fractal Rust (GPU)
 
+![Fractal Image](./fractal.webp)
+
 ## Build
 ### Native
 ```bash

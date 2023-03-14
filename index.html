@@ -8,13 +8,37 @@
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
     <title>Fractal | Rust</title>
     <style>
-        canvas {
-            background-color: black;
+        html {
+            min-height: 100%;
+            position: relative;
+        }
+
+        body {
+            height: 100%;
+            padding: 0;
+            margin: 0;
+        }
+
+        #container {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            overflow: hidden;
+        }
+
+        #wasm-block {
+            width: 100% !important;
+            height: 100% !important;
         }
     </style>
 </head>
 
-<body id="wasm-block">
+<body>
+    <div id="container">
+        <canvas id="wasm-block"></canvas>
+    </div>
 </body>
 
 </html>
