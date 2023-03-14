@@ -4,6 +4,8 @@ use std::iter;
 use web_sys::HtmlCanvasElement;
 #[cfg(target_arch = "wasm32")]
 use winit::dpi::LogicalSize;
+#[cfg(target_arch = "wasm32")]
+use std::sync::Arc;
 
 use wgpu::util::DeviceExt;
 use winit::{
@@ -148,7 +150,8 @@ impl State {
 
 #[cfg(target_arch = "wasm32")]
 impl State {
-	async fn new(canvas: HtmlCanvasElement, event_loop: &EventLoop<()>) -> Self {
+	async fn new(canvas_arc: Arc<HtmlCanvasElement>, event_loop: &EventLoop<()>) -> Self {
+		let canvas: HtmlCanvasElement = Arc::try_unwrap(canvas_arc).unwrap();
 		let (width, height) = (canvas.client_width(), canvas.client_height());
 		let instance = State::create_instance();
 		let (surface, size) = State::create_surface(&instance, &canvas);
@@ -469,7 +472,7 @@ impl State {
 							b: 1.0,
 							a: 1.0,
 						}),
-						store: true,
+						store: false,
 					},
 				})],
 				depth_stencil_attachment: None,
@@ -580,14 +583,14 @@ pub async fn run() -> ! {
 		.and_then(|d| d.get_element_by_id("wasm-block"))
 		.map(|e| e.unchecked_into::<HtmlCanvasElement>())
 		.expect("Canvas not found");
-	let state = State::new(canvas, &event_loop).await;
+	let state = State::new(Arc::new(canvas), &event_loop).await;
 	run_loop(state, event_loop)
 }
 
 #[cfg(target_arch = "wasm32")]
-pub async fn run_with_canvas(canvas: HtmlCanvasElement) -> ! {
+pub async fn run_with_canvas(canvas_arc: Arc<HtmlCanvasElement>) -> ! {
 	init_logging();
 	let event_loop = EventLoop::new();
-	let state = State::new(canvas, &event_loop).await;
+	let state = State::new(canvas_arc, &event_loop).await;
 	run_loop(state, event_loop)
 }
