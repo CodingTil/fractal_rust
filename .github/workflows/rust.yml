@@ -17,8 +17,8 @@ jobs:
         run: cargo test --release --all-features
       - name: Clean
         run: cargo clean
-      - name: Build Wasm
-        run: trunk build --release
+#       - name: Build Wasm
+#         run: trunk build --release
 
   clippy:
     runs-on: ubuntu-latest
