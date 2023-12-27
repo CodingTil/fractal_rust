@@ -12,11 +12,13 @@ jobs:
       - name: Install Trunk
         run: cargo install --locked trunk
       - name: Build
-        run: cargo build --release --all-features --verbose
+        run: cargo build --release --all-features
       - name: Test
-        run: cargo test --release --all-features --verbose
+        run: cargo test --release --all-features
+      - name: Clean
+        run: cargo clean
       - name: Build Wasm
-        run: trunk build --release --verbose
+        run: trunk build --release
 
   clippy:
     runs-on: ubuntu-latest
