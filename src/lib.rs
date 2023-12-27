@@ -7,11 +7,12 @@ use web_sys::HtmlCanvasElement;
 #[cfg(target_arch = "wasm32")]
 use winit::dpi::LogicalSize;
 
-use wgpu::util::DeviceExt;
+use wgpu::{util::DeviceExt, StoreOp};
 use winit::{
 	dpi::PhysicalSize,
 	event::*,
-	event_loop::{ControlFlow, EventLoop},
+	event_loop::EventLoop,
+	keyboard::{KeyCode, PhysicalKey},
 	window::{Window, WindowBuilder},
 };
 
@@ -162,7 +163,7 @@ impl State {
 			.map(|w| {
 				// Set initial view port -- ** This isn't what we want! **
 				// We want the canvas to always fit to the document.
-				w.set_inner_size(LogicalSize::new(width, height));
+				let _ = w.request_inner_size(LogicalSize::new(width, height));
 				w
 			})
 			.expect("Could not build window");
@@ -175,7 +176,7 @@ impl State {
 	) -> (wgpu::Surface, PhysicalSize<u32>) {
 		let size = PhysicalSize::new(canvas.client_width() as u32, canvas.client_height() as u32);
 
-		let surface = instance.create_surface_from_canvas(canvas).unwrap();
+		let surface = instance.create_surface_from_canvas(canvas.clone()).unwrap();
 
 		(surface, size)
 	}
@@ -188,6 +189,8 @@ impl State {
 		wgpu::Instance::new(wgpu::InstanceDescriptor {
 			backends: wgpu::Backends::all(),
 			dx12_shader_compiler: Default::default(),
+			flags: Default::default(),
+			gles_minor_version: Default::default(),
 		})
 	}
 
@@ -232,7 +235,7 @@ impl State {
 			.formats
 			.iter()
 			.copied()
-			.find(|f| f.describe().srgb)
+			.find(|f| f.is_srgb())
 			.unwrap_or(surface_caps.formats[0]);
 		let config = wgpu::SurfaceConfiguration {
 			usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -470,10 +473,12 @@ impl State {
 							b: 1.0,
 							a: 1.0,
 						}),
-						store: true,
+						store: StoreOp::Store,
 					},
 				})],
 				depth_stencil_attachment: None,
+				timestamp_writes: None,
+				occlusion_query_set: None,
 			});
 
 			render_pass.set_pipeline(&self.render_pipeline);
@@ -507,8 +512,8 @@ fn create_window(event_loop: &EventLoop<()>) -> Window {
 	WindowBuilder::new().build(event_loop).unwrap()
 }
 
-fn run_loop(mut state: State, event_loop: EventLoop<()>) -> ! {
-	event_loop.run(move |event, _, control_flow| {
+fn run_loop(mut state: State, event_loop: EventLoop<()>) {
+	let result = event_loop.run(move |event, control_flow| {
 		match event {
 			Event::WindowEvent {
 				ref event,
@@ -518,62 +523,60 @@ fn run_loop(mut state: State, event_loop: EventLoop<()>) -> ! {
 					match event {
 						WindowEvent::CloseRequested
 						| WindowEvent::KeyboardInput {
-							input:
-								KeyboardInput {
+							event:
+								KeyEvent {
 									state: ElementState::Pressed,
-									virtual_keycode: Some(VirtualKeyCode::Escape),
+									physical_key: PhysicalKey::Code(KeyCode::Escape),
 									..
 								},
 							..
-						} => *control_flow = ControlFlow::Exit,
+						} => control_flow.exit(),
 						WindowEvent::Resized(physical_size) => {
 							state.resize(*physical_size);
+							state.window().request_redraw();
 						}
-						WindowEvent::ScaleFactorChanged { new_inner_size, .. } => {
-							// new_inner_size is &mut so w have to dereference it twice
-							state.resize(**new_inner_size);
+						WindowEvent::RedrawRequested if window_id == state.window().id() => {
+							state.update();
+							match state.render() {
+								Ok(_) => {}
+								// Reconfigure the surface if it's lost or outdated
+								Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
+									state.resize(state.size)
+								}
+								// The system is out of memory, we should probably quit
+								Err(wgpu::SurfaceError::OutOfMemory) => control_flow.exit(),
+								// We're ignoring timeouts
+								Err(wgpu::SurfaceError::Timeout) => {
+									log::warn!("Surface timeout")
+								}
+							}
 						}
 						_ => {}
 					}
 				}
 			}
-			Event::RedrawRequested(window_id) if window_id == state.window().id() => {
-				state.update();
-				match state.render() {
-					Ok(_) => {}
-					// Reconfigure the surface if it's lost or outdated
-					Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
-						state.resize(state.size)
-					}
-					// The system is out of memory, we should probably quit
-					Err(wgpu::SurfaceError::OutOfMemory) => *control_flow = ControlFlow::Exit,
-					// We're ignoring timeouts
-					Err(wgpu::SurfaceError::Timeout) => log::warn!("Surface timeout"),
-				}
-			}
-			Event::MainEventsCleared => {
-				// RedrawRequested will only trigger once, unless we manually
-				// request it.
+			Event::AboutToWait => {
 				state.window().request_redraw();
 			}
 			_ => {}
 		}
 	});
+	result.unwrap();
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub async fn run() -> ! {
+pub async fn run() {
 	init_logging();
-	let event_loop = EventLoop::new();
+	let event_loop = EventLoop::new().unwrap();
 	let window = create_window(&event_loop);
 	let state = State::new(window).await;
 	run_loop(state, event_loop)
 }
 
 #[cfg(target_arch = "wasm32")]
-pub async fn run() -> ! {
+pub async fn run() {
 	init_logging();
-	let event_loop = EventLoop::new();
+	let event_loop = EventLoop::new().unwrap();
 	use wasm_bindgen::JsCast;
 	let canvas = web_sys::window()
 		.and_then(|w| w.document())
@@ -585,9 +588,9 @@ pub async fn run() -> ! {
 }
 
 #[cfg(target_arch = "wasm32")]
-pub async fn run_with_canvas(canvas_arc: Arc<HtmlCanvasElement>) -> ! {
+pub async fn run_with_canvas(canvas_arc: Arc<HtmlCanvasElement>) {
 	init_logging();
-	let event_loop = EventLoop::new();
+	let event_loop = EventLoop::new().unwrap();
 	let state = State::new(canvas_arc, &event_loop).await;
 	run_loop(state, event_loop)
 }
