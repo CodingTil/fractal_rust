@@ -1,11 +1,11 @@
 use std::iter;
 
 #[cfg(target_arch = "wasm32")]
+use std::sync::Arc;
+#[cfg(target_arch = "wasm32")]
 use web_sys::HtmlCanvasElement;
 #[cfg(target_arch = "wasm32")]
 use winit::dpi::LogicalSize;
-#[cfg(target_arch = "wasm32")]
-use std::sync::Arc;
 
 use wgpu::util::DeviceExt;
 use winit::{
@@ -232,8 +232,7 @@ impl State {
 			.formats
 			.iter()
 			.copied()
-			.filter(|f| f.describe().srgb)
-			.next()
+			.find(|f| f.describe().srgb)
 			.unwrap_or(surface_caps.formats[0]);
 		let config = wgpu::SurfaceConfiguration {
 			usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -505,8 +504,7 @@ fn init_logging() {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn create_window(event_loop: &EventLoop<()>) -> Window {
-	let window = WindowBuilder::new().build(&event_loop).unwrap();
-	window
+	WindowBuilder::new().build(event_loop).unwrap()
 }
 
 fn run_loop(mut state: State, event_loop: EventLoop<()>) -> ! {
