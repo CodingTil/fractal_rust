@@ -307,7 +307,7 @@ impl State {
 				resource: dimension_uniform_buffer.as_entire_binding(),
 			}],
 		});
-		let fractal_uniform = FractalUniform::new(10000);
+		let fractal_uniform = FractalUniform::new(1000);
 		let fractal_uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
 			label: Some("fractal_uniform_buffer"),
 			contents: bytemuck::cast_slice(&[fractal_uniform]),
