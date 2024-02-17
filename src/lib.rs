@@ -1,11 +1,18 @@
 use std::iter;
 
+use rand::seq::SliceRandom;
+
 #[cfg(target_arch = "wasm32")]
 use std::sync::Arc;
 #[cfg(target_arch = "wasm32")]
 use web_sys::HtmlCanvasElement;
 #[cfg(target_arch = "wasm32")]
 use winit::dpi::LogicalSize;
+
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::SystemTime;
+#[cfg(target_arch = "wasm32")]
+use web_time::SystemTime;
 
 use wgpu::{util::DeviceExt, StoreOp};
 use winit::{
@@ -30,16 +37,16 @@ impl DimensionUniform {
 		Self {
 			width,
 			height,
-			width_inv: 1.0 / width as f32,
-			height_inv: 1.0 / height as f32,
+			width_inv: (1.0 / width as f64) as f32,
+			height_inv: (1.0 / height as f64) as f32,
 		}
 	}
 
 	fn update(&mut self, width: u32, height: u32) {
 		self.width = width;
 		self.height = height;
-		self.width_inv = 1.0 / width as f32;
-		self.height_inv = 1.0 / height as f32;
+		self.width_inv = (1.0 / width as f64) as f32;
+		self.height_inv = (1.0 / height as f64) as f32;
 	}
 }
 
@@ -49,22 +56,45 @@ struct FractalUniform {
 	max_iterations: u32,
 	c_real: f32,
 	c_imag: f32,
-	padding: u32, // padding to make the struct 16 bytes -> support for more GPUs
+	elapsed_time: f32,
 }
 
 impl FractalUniform {
-	fn new(max_iterations: u32, c: [f32; 2]) -> Self {
-		Self {
+	fn new(max_iterations: u32) -> Self {
+		let mut fractal_uniform = Self {
 			max_iterations,
-			c_real: c[0],
-			c_imag: c[1],
-			padding: 0,
+			c_real: 0.0,
+			c_imag: 0.0,
+			elapsed_time: 0.0,
+		};
+		fractal_uniform.reset();
+		fractal_uniform
+	}
+
+	fn update(&mut self, total_elapsed: f32) {
+		self.elapsed_time += total_elapsed * 0.5;
+
+		if self.elapsed_time > 60.0 {
+			self.reset()
 		}
 	}
 
-	fn update(&mut self, c: [f32; 2]) {
-		self.c_real = c[0];
-		self.c_imag = c[1];
+	fn reset(&mut self) {
+		self.elapsed_time = 0.0;
+		let location_options: [[f32; 2]; 9] = [
+			[0.281_717_93, 0.577_105_3],
+			[-0.811_531_2, 0.201_429_58],
+			[0.452_721_03, 0.396_494_27],
+			[-0.745428, 0.113009],
+			[-0.348_537_74, -0.606_592_24],
+			[-0.348_314_94, -0.606_486_6],
+			[-1.027705e-1, -9.475189e-1],
+			[-0.5577, -0.6099],
+			[-0.59990625, 0.429_070_32],
+		];
+		let random_location = location_options.choose(&mut rand::thread_rng()).unwrap();
+		self.c_real = random_location[0];
+		self.c_imag = random_location[1];
 	}
 }
 
@@ -121,7 +151,7 @@ struct State {
 	fractal_uniform: FractalUniform,
 	fractal_uniform_buffer: wgpu::Buffer,
 	fractal_uniform_bind_group: wgpu::BindGroup,
-	start_time: f32,
+	last_time: SystemTime,
 	window: Window,
 }
 
@@ -277,8 +307,7 @@ impl State {
 				resource: dimension_uniform_buffer.as_entire_binding(),
 			}],
 		});
-
-		let fractal_uniform = FractalUniform::new(35, [-0.8, 0.156]);
+		let fractal_uniform = FractalUniform::new(10000);
 		let fractal_uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
 			label: Some("fractal_uniform_buffer"),
 			contents: bytemuck::cast_slice(&[fractal_uniform]),
@@ -375,7 +404,7 @@ impl State {
 		});
 		let num_indices = INDICES.len() as u32;
 
-		let start_time = 0.0;
+		let last_time = SystemTime::now();
 
 		Self {
 			surface,
@@ -393,7 +422,7 @@ impl State {
 			fractal_uniform,
 			fractal_uniform_buffer,
 			fractal_uniform_bind_group,
-			start_time,
+			last_time,
 			window,
 		}
 	}
@@ -424,23 +453,10 @@ impl State {
 	}
 
 	fn update(&mut self) {
-		let elapsed = 1.0_f32 / 60.0_f32 + self.start_time;
-		self.start_time = elapsed;
-
-		let current_c_real = self.fractal_uniform.c_real;
-		let current_c_imag = self.fractal_uniform.c_imag;
-
-		let mut new_c_real = elapsed.sin() / 2.0_f32.sqrt() + current_c_real;
-		let mut new_c_imag = (elapsed * 0.3).sin() / 2.0_f32.sqrt() + current_c_imag;
-
-		// clamp length of c to 1.0
-		let c_length = (new_c_real * new_c_real + new_c_imag * new_c_imag).sqrt();
-		if c_length > 1.0 {
-			new_c_real /= c_length;
-			new_c_imag /= c_length;
-		}
-
-		self.fractal_uniform.update([new_c_real, new_c_imag]);
+		let now = SystemTime::now();
+		let total_elapsed = now.duration_since(self.last_time).unwrap().as_secs_f32();
+		self.last_time = now;
+		self.fractal_uniform.update(total_elapsed);
 		self.queue.write_buffer(
 			&self.fractal_uniform_buffer,
 			0,
