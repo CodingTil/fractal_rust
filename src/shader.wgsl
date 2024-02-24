@@ -19,7 +19,7 @@ struct FractalUniform {
 	max_iterations: u32,
 	c_real: f32,
 	c_imag: f32,
-	elapsed_time: f32,
+	zoom_factor: f32,
 }
 @group(1) @binding(0)
 var<uniform> fractal_parameters: FractalUniform;
@@ -57,8 +57,8 @@ fn compute_iterations_smooth(c: vec2<f32>, max_iterations: u32) -> f32 {
 }
 
 // Color gradient
-fn colorGradient(factor: f32, uv_x: f32, uv_y: f32, time: f32) -> vec4<f32> {
-	let f = clamp(pow(factor, 1.0 - factor * (time - 35.0) / 35.0), 0.0, 1.0);
+fn colorGradient(factor: f32, uv_x: f32, uv_y: f32, zoom_factor: f32) -> vec4<f32> {
+	let f = clamp(pow(factor, 1.0 - factor * zoom_factor), 0.0, 1.0);
 	let r = mix(0.0, 1.0, f) * (uv_x * 0.5 + 0.5);
 	let g = mix(0.0, 1.0, f) * (uv_y * 0.5 + 0.5);
 	let b = mix(0.0, 1.0, f) * (-uv_x * 0.5 + 0.5);
@@ -72,17 +72,14 @@ fn colorGradient(factor: f32, uv_x: f32, uv_y: f32, time: f32) -> vec4<f32> {
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 	let mandelbrot_center = vec2<f32>(-0.5, 0.0);
 
-	let zoom = pow(0.5, 15.0 * (0.5 - 0.5 * cos(0.255 * fractal_parameters.elapsed_time)));
-
 	let uv_x = (2.0 * (f32(in.clip_position.x) - 0.5 * f32(dimension.width)) * dimension.width_inv) * f32(dimension.width) * dimension.height_inv;
 	let uv_y = 2.0 * (f32(in.clip_position.y) - 0.5 * f32(dimension.height)) * dimension.height_inv;
 
-	let lerp_factor = 1.0 - zoom;
-	let target_c = vec2<f32>(mix(mandelbrot_center.x, fractal_parameters.c_real, lerp_factor),
-							mix(mandelbrot_center.y, fractal_parameters.c_imag, lerp_factor));
+	let target_c = vec2<f32>(mix(mandelbrot_center.x, fractal_parameters.c_real, 1.0 - fractal_parameters.zoom_factor),
+							mix(mandelbrot_center.y, fractal_parameters.c_imag, 1.0 - fractal_parameters.zoom_factor));
 
-	let c = vec2<f32>(target_c.x + uv_x * zoom, target_c.y + uv_y * zoom);
+	let c = vec2<f32>(target_c.x + uv_x * fractal_parameters.zoom_factor, target_c.y + uv_y * fractal_parameters.zoom_factor);
 
 	let iterations = compute_iterations_smooth(c, fractal_parameters.max_iterations);
-	return colorGradient(f32(iterations) / f32(fractal_parameters.max_iterations), uv_x, uv_y, fractal_parameters.elapsed_time);
+	return colorGradient(f32(iterations) / f32(fractal_parameters.max_iterations), uv_x, uv_y, fractal_parameters.zoom_factor);
 }

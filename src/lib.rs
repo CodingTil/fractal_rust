@@ -1,9 +1,7 @@
-use std::iter;
+use std::{iter, sync::Arc};
 
 use rand::seq::SliceRandom;
 
-#[cfg(target_arch = "wasm32")]
-use std::sync::Arc;
 #[cfg(target_arch = "wasm32")]
 use web_sys::HtmlCanvasElement;
 #[cfg(target_arch = "wasm32")]
@@ -14,7 +12,7 @@ use std::time::SystemTime;
 #[cfg(target_arch = "wasm32")]
 use web_time::SystemTime;
 
-use wgpu::{util::DeviceExt, StoreOp};
+use wgpu::{util::DeviceExt, ShaderModuleDescriptor, ShaderSource, StoreOp};
 use winit::{
 	dpi::PhysicalSize,
 	event::*,
@@ -56,7 +54,7 @@ struct FractalUniform {
 	max_iterations: u32,
 	c_real: f32,
 	c_imag: f32,
-	elapsed_time: f32,
+	zoom_factor: f32,
 }
 
 impl FractalUniform {
@@ -65,22 +63,26 @@ impl FractalUniform {
 			max_iterations,
 			c_real: 0.0,
 			c_imag: 0.0,
-			elapsed_time: 0.0,
+			zoom_factor: 0.0,
 		};
 		fractal_uniform.reset();
 		fractal_uniform
 	}
 
-	fn update(&mut self, total_elapsed: f32) {
-		self.elapsed_time += total_elapsed * 0.5;
+	fn update(&mut self, total_time: f32, current_point_age: f32) -> bool {
+		self.zoom_factor =
+			0.5_f32.powf(15.0_f32 * (0.5_f32 - 0.5_f32 * (0.1275_f32 * total_time).cos()));
 
-		if self.elapsed_time > 60.0 {
-			self.reset()
+		if (1.0_f32 - self.zoom_factor).abs() < 0.001 && current_point_age > 10.0 {
+			self.reset();
+			true
+		} else {
+			false
 		}
 	}
 
 	fn reset(&mut self) {
-		self.elapsed_time = 0.0;
+		self.zoom_factor = 0.0;
 		let location_options: [[f32; 2]; 9] = [
 			[0.281_717_93, 0.577_105_3],
 			[-0.811_531_2, 0.201_429_58],
@@ -135,8 +137,8 @@ const VERTICES: &[Vertex] = &[
 
 const INDICES: &[u16] = &[0, 1, 2, 1, 2, 3];
 
-struct State {
-	surface: wgpu::Surface,
+struct State<'a> {
+	surface: wgpu::Surface<'a>,
 	device: wgpu::Device,
 	queue: wgpu::Queue,
 	config: wgpu::SurfaceConfiguration,
@@ -152,43 +154,40 @@ struct State {
 	fractal_uniform_buffer: wgpu::Buffer,
 	fractal_uniform_bind_group: wgpu::BindGroup,
 	last_time: SystemTime,
-	window: Window,
+	total_time: f32,
+	current_point_age: f32,
+	window: Arc<Window>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-impl State {
-	async fn new(window: Window) -> Self {
+impl<'a> State<'a> {
+	async fn new(window: &Arc<Window>) -> Self {
 		let instance = State::create_instance();
-		let (surface, size) = State::create_surface(&instance, &window);
-		State::init(instance, window, surface, size).await
+		let (surface, size) = State::create_surface(&instance, window.clone());
+		State::init(instance, window.clone(), surface, size).await
 	}
 
-	fn create_surface(
+	fn create_surface<'b>(
 		instance: &wgpu::Instance,
-		window: &Window,
-	) -> (wgpu::Surface, PhysicalSize<u32>) {
+		window: Arc<Window>,
+	) -> (wgpu::Surface<'b>, PhysicalSize<u32>) {
 		let size = window.inner_size();
 
-		// # Safety
-		//
-		// The surface needs to live as long as the window that created it.
-		// State owns the window so this should be safe.
-		let surface = unsafe { instance.create_surface(&window) }.unwrap();
+		let surface = instance.create_surface(window).unwrap();
 
 		(surface, size)
 	}
 }
 
 #[cfg(target_arch = "wasm32")]
-impl State {
-	async fn new(canvas_arc: Arc<HtmlCanvasElement>, event_loop: &EventLoop<()>) -> Self {
-		let canvas: HtmlCanvasElement = Arc::try_unwrap(canvas_arc).unwrap();
+impl<'a> State<'a> {
+	async fn new(canvas: Arc<HtmlCanvasElement>, event_loop: &EventLoop<()>) -> Self {
 		let (width, height) = (canvas.client_width(), canvas.client_height());
 		let instance = State::create_instance();
-		let (surface, size) = State::create_surface(&instance, &canvas);
+		let (surface, size) = State::create_surface(&instance, canvas.clone());
 		use winit::platform::web::WindowBuilderExtWebSys;
 		let window = WindowBuilder::new()
-			.with_canvas(Some(canvas))
+			.with_canvas(Some(Arc::as_ref(&canvas).clone()))
 			.build(&event_loop)
 			.map(|w| {
 				// Set initial view port -- ** This isn't what we want! **
@@ -197,22 +196,24 @@ impl State {
 				w
 			})
 			.expect("Could not build window");
-		State::init(instance, window, surface, size).await
+		State::init(instance, window.into(), surface, size).await
 	}
 
-	fn create_surface(
+	fn create_surface<'b>(
 		instance: &wgpu::Instance,
-		canvas: &HtmlCanvasElement,
-	) -> (wgpu::Surface, PhysicalSize<u32>) {
+		canvas: Arc<HtmlCanvasElement>,
+	) -> (wgpu::Surface<'b>, PhysicalSize<u32>) {
 		let size = PhysicalSize::new(canvas.client_width() as u32, canvas.client_height() as u32);
 
-		let surface = instance.create_surface_from_canvas(canvas.clone()).unwrap();
+		let surface = instance
+			.create_surface(wgpu::SurfaceTarget::Canvas(Arc::as_ref(&canvas).clone()))
+			.unwrap();
 
 		(surface, size)
 	}
 }
 
-impl State {
+impl<'a> State<'a> {
 	fn create_instance() -> wgpu::Instance {
 		// The instance is a handle to our GPU
 		// BackendBit::PRIMARY => Vulkan + Metal + DX12 + Browser WebGPU
@@ -226,8 +227,8 @@ impl State {
 
 	async fn init(
 		instance: wgpu::Instance,
-		window: Window,
-		surface: wgpu::Surface,
+		window: Arc<Window>,
+		surface: wgpu::Surface<'a>,
 		size: PhysicalSize<u32>,
 	) -> Self {
 		let adapter = instance
@@ -243,10 +244,10 @@ impl State {
 			.request_device(
 				&wgpu::DeviceDescriptor {
 					label: None,
-					features: wgpu::Features::empty(),
+					required_features: wgpu::Features::empty(),
 					// WebGL doesn't support all of wgpu's features, so if
 					// we're building for the web we'll have to disable some.
-					limits: if cfg!(target_arch = "wasm32") {
+					required_limits: if cfg!(target_arch = "wasm32") {
 						wgpu::Limits::downlevel_webgl2_defaults()
 					} else {
 						wgpu::Limits::default()
@@ -275,6 +276,7 @@ impl State {
 			present_mode: surface_caps.present_modes[0],
 			alpha_mode: surface_caps.alpha_modes[0],
 			view_formats: vec![],
+			desired_maximum_frame_latency: Default::default(),
 		};
 		surface.configure(&device, &config);
 
@@ -307,7 +309,7 @@ impl State {
 				resource: dimension_uniform_buffer.as_entire_binding(),
 			}],
 		});
-		let fractal_uniform = FractalUniform::new(1000);
+		let fractal_uniform = FractalUniform::new(850);
 		let fractal_uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
 			label: Some("fractal_uniform_buffer"),
 			contents: bytemuck::cast_slice(&[fractal_uniform]),
@@ -336,7 +338,12 @@ impl State {
 			}],
 		});
 
-		let shader = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
+		//let shader = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
+		let smd = ShaderModuleDescriptor {
+			label: Some("shader.wgsl"),
+			source: ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
+		};
+		let shader = device.create_shader_module(smd);
 
 		let render_pipeline_layout =
 			device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -405,6 +412,8 @@ impl State {
 		let num_indices = INDICES.len() as u32;
 
 		let last_time = SystemTime::now();
+		let total_time = 0.0;
+		let current_point_age = 0.0;
 
 		Self {
 			surface,
@@ -423,6 +432,8 @@ impl State {
 			fractal_uniform_buffer,
 			fractal_uniform_bind_group,
 			last_time,
+			total_time,
+			current_point_age,
 			window,
 		}
 	}
@@ -454,9 +465,16 @@ impl State {
 
 	fn update(&mut self) {
 		let now = SystemTime::now();
-		let total_elapsed = now.duration_since(self.last_time).unwrap().as_secs_f32();
+		let elapsed = now.duration_since(self.last_time).unwrap().as_secs_f32();
+		self.total_time += elapsed;
+		self.current_point_age += elapsed;
 		self.last_time = now;
-		self.fractal_uniform.update(total_elapsed);
+		let reset = self
+			.fractal_uniform
+			.update(self.total_time, self.current_point_age);
+		if reset {
+			self.current_point_age = 0.0;
+		}
 		self.queue.write_buffer(
 			&self.fractal_uniform_buffer,
 			0,
@@ -584,8 +602,8 @@ fn run_loop(mut state: State, event_loop: EventLoop<()>) {
 pub async fn run() {
 	init_logging();
 	let event_loop = EventLoop::new().unwrap();
-	let window = create_window(&event_loop);
-	let state = State::new(window).await;
+	let window = Arc::new(create_window(&event_loop));
+	let state = State::new(&window).await;
 	run_loop(state, event_loop)
 }
 

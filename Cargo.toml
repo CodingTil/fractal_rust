@@ -16,17 +16,19 @@ path = "src/main.rs"
 [dependencies]
 cfg-if = "1"
 winit = { version = "0.29.7", features = ["rwh_05"] }
-env_logger = "0.10"
+env_logger = "0.11.2"
 log = "0.4"
-wgpu = "0.18.0"
 pollster = "0.3.0"
 bytemuck = { version = "1.13.1", features = ["derive"] }
 rand = "0.8.5"
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+wgpu = "0.19.1"
+
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 console_error_panic_hook = "0.1.6"
 console_log = "1.0.0"
-wgpu = { version = "0.18.0", features = ["webgl"]}
+wgpu = { version = "0.19.1", default-features = false, features = ["webgl", "wgsl"]}
 wasm-bindgen = "0.2.76"
 wasm-bindgen-futures = "0.4.30"
 web-sys = { version = "0.3.53", features = [
@@ -34,6 +36,7 @@ web-sys = { version = "0.3.53", features = [
     'HtmlCanvasElement'
 ]}
 web-time = "1.0.0"
+getrandom = { version = "0.2", features = ["js"] }
 
 [build-dependencies]
 anyhow = "1.0"
