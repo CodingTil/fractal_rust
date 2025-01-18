@@ -217,11 +217,10 @@ impl<'a> State<'a> {
 	fn create_instance() -> wgpu::Instance {
 		// The instance is a handle to our GPU
 		// BackendBit::PRIMARY => Vulkan + Metal + DX12 + Browser WebGPU
-		wgpu::Instance::new(wgpu::InstanceDescriptor {
+		wgpu::Instance::new(&wgpu::InstanceDescriptor {
 			backends: wgpu::Backends::all(),
-			dx12_shader_compiler: Default::default(),
 			flags: Default::default(),
-			gles_minor_version: Default::default(),
+			backend_options: Default::default(),
 		})
 	}
 
@@ -252,6 +251,7 @@ impl<'a> State<'a> {
 					} else {
 						wgpu::Limits::default()
 					},
+					memory_hints: Default::default(),
 				},
 				None, // Trace path
 			)
@@ -360,12 +360,13 @@ impl<'a> State<'a> {
 			layout: Some(&render_pipeline_layout),
 			vertex: wgpu::VertexState {
 				module: &shader,
-				entry_point: "vs_main",
+				entry_point: Some("vs_main"),
 				buffers: &[Vertex::desc()],
+				compilation_options: Default::default(),
 			},
 			fragment: Some(wgpu::FragmentState {
 				module: &shader,
-				entry_point: "fs_main",
+				entry_point: Some("fs_main"),
 				targets: &[Some(wgpu::ColorTargetState {
 					format: config.format,
 					blend: Some(wgpu::BlendState {
@@ -374,6 +375,7 @@ impl<'a> State<'a> {
 					}),
 					write_mask: wgpu::ColorWrites::ALL,
 				})],
+				compilation_options: Default::default(),
 			}),
 			primitive: wgpu::PrimitiveState {
 				topology: wgpu::PrimitiveTopology::TriangleList,
@@ -397,6 +399,7 @@ impl<'a> State<'a> {
 			// If the pipeline will be used with a multiview render pass, this
 			// indicates how many array layers the attachments will have.
 			multiview: None,
+			cache: None,
 		});
 
 		let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -582,6 +585,10 @@ fn run_loop(mut state: State, event_loop: EventLoop<()>) {
 								// We're ignoring timeouts
 								Err(wgpu::SurfaceError::Timeout) => {
 									log::warn!("Surface timeout")
+								}
+								Err(err) => {
+									log::error!("Failed to render: {:?}", err);
+									control_flow.exit();
 								}
 							}
 						}
