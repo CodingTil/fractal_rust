@@ -1,6 +1,6 @@
 use std::{iter, sync::Arc};
 
-use rand::seq::SliceRandom;
+use rand::prelude::IndexedRandom;
 
 #[cfg(target_arch = "wasm32")]
 use web_sys::HtmlCanvasElement;
@@ -14,11 +14,12 @@ use web_time::SystemTime;
 
 use wgpu::{util::DeviceExt, ShaderModuleDescriptor, ShaderSource, StoreOp};
 use winit::{
+	application::ApplicationHandler,
 	dpi::PhysicalSize,
 	event::*,
 	event_loop::EventLoop,
 	keyboard::{KeyCode, PhysicalKey},
-	window::{Window, WindowBuilder},
+	window::Window,
 };
 
 #[repr(C)]
@@ -94,7 +95,7 @@ impl FractalUniform {
 			[-0.5577, -0.6099],
 			[-0.59990625, 0.429_070_32],
 		];
-		let random_location = location_options.choose(&mut rand::thread_rng()).unwrap();
+		let random_location = location_options.choose(&mut rand::rng()).unwrap();
 		self.c_real = random_location[0];
 		self.c_imag = random_location[1];
 	}
@@ -181,21 +182,22 @@ impl<'a> State<'a> {
 
 #[cfg(target_arch = "wasm32")]
 impl<'a> State<'a> {
-	async fn new(canvas: Arc<HtmlCanvasElement>, event_loop: &EventLoop<()>) -> Self {
+	async fn new(
+		canvas: Arc<HtmlCanvasElement>,
+		event_loop: &winit::event_loop::ActiveEventLoop,
+	) -> Self {
 		let (width, height) = (canvas.client_width(), canvas.client_height());
 		let instance = State::create_instance();
 		let (surface, size) = State::create_surface(&instance, canvas.clone());
-		use winit::platform::web::WindowBuilderExtWebSys;
-		let window = WindowBuilder::new()
-			.with_canvas(Some(Arc::as_ref(&canvas).clone()))
-			.build(&event_loop)
-			.map(|w| {
-				// Set initial view port -- ** This isn't what we want! **
-				// We want the canvas to always fit to the document.
-				let _ = w.request_inner_size(LogicalSize::new(width, height));
-				w
-			})
+		use winit::platform::web::WindowAttributesExtWebSys;
+		let window_attrs =
+			Window::default_attributes().with_canvas(Some(Arc::as_ref(&canvas).clone()));
+		let window = event_loop
+			.create_window(window_attrs)
 			.expect("Could not build window");
+		// Set initial view port -- ** This isn't what we want! **
+		// We want the canvas to always fit to the document.
+		let _ = window.request_inner_size(LogicalSize::new(width, height));
 		State::init(instance, window.into(), surface, size).await
 	}
 
@@ -221,6 +223,7 @@ impl<'a> State<'a> {
 			backends: wgpu::Backends::all(),
 			flags: Default::default(),
 			backend_options: Default::default(),
+			memory_budget_thresholds: Default::default(),
 		})
 	}
 
@@ -240,21 +243,20 @@ impl<'a> State<'a> {
 			.unwrap();
 
 		let (device, queue) = adapter
-			.request_device(
-				&wgpu::DeviceDescriptor {
-					label: None,
-					required_features: wgpu::Features::empty(),
-					// WebGL doesn't support all of wgpu's features, so if
-					// we're building for the web we'll have to disable some.
-					required_limits: if cfg!(target_arch = "wasm32") {
-						wgpu::Limits::downlevel_webgl2_defaults()
-					} else {
-						wgpu::Limits::default()
-					},
-					memory_hints: Default::default(),
+			.request_device(&wgpu::DeviceDescriptor {
+				label: None,
+				required_features: wgpu::Features::empty(),
+				// WebGL doesn't support all of wgpu's features, so if
+				// we're building for the web we'll have to disable some.
+				required_limits: if cfg!(target_arch = "wasm32") {
+					wgpu::Limits::downlevel_webgl2_defaults()
+				} else {
+					wgpu::Limits::default()
 				},
-				None, // Trace path
-			)
+				memory_hints: Default::default(),
+				experimental_features: Default::default(),
+				trace: Default::default(),
+			})
 			.await
 			.unwrap();
 
@@ -512,6 +514,7 @@ impl<'a> State<'a> {
 						}),
 						store: StoreOp::Store,
 					},
+					depth_slice: None,
 				})],
 				depth_stencil_attachment: None,
 				timestamp_writes: None,
@@ -545,73 +548,97 @@ fn init_logging() {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn create_window(event_loop: &EventLoop<()>) -> Window {
-	WindowBuilder::new().build(event_loop).unwrap()
+fn create_window(event_loop: &winit::event_loop::ActiveEventLoop) -> Window {
+	event_loop.create_window(Default::default()).unwrap()
 }
 
-fn run_loop(mut state: State, event_loop: EventLoop<()>) {
-	let result = event_loop.run(move |event, control_flow| {
-		match event {
-			Event::WindowEvent {
-				ref event,
-				window_id,
-			} if window_id == state.window().id() => {
-				if !state.input(event) {
-					match event {
-						WindowEvent::CloseRequested
-						| WindowEvent::KeyboardInput {
-							event:
-								KeyEvent {
-									state: ElementState::Pressed,
-									physical_key: PhysicalKey::Code(KeyCode::Escape),
-									..
-								},
-							..
-						} => control_flow.exit(),
-						WindowEvent::Resized(physical_size) => {
-							state.resize(*physical_size);
-							state.window().request_redraw();
-						}
-						WindowEvent::RedrawRequested if window_id == state.window().id() => {
-							state.update();
-							match state.render() {
-								Ok(_) => {}
-								// Reconfigure the surface if it's lost or outdated
-								Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
-									state.resize(state.size)
-								}
-								// The system is out of memory, we should probably quit
-								Err(wgpu::SurfaceError::OutOfMemory) => control_flow.exit(),
-								// We're ignoring timeouts
-								Err(wgpu::SurfaceError::Timeout) => {
-									log::warn!("Surface timeout")
-								}
-								Err(err) => {
-									log::error!("Failed to render: {:?}", err);
-									control_flow.exit();
-								}
-							}
-						}
-						_ => {}
-					}
+struct App<'a> {
+	state: Option<State<'a>>,
+	#[cfg(target_arch = "wasm32")]
+	canvas: Option<Arc<HtmlCanvasElement>>,
+}
+
+impl<'a> ApplicationHandler for App<'a> {
+	fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
+		if self.state.is_none() {
+			#[cfg(not(target_arch = "wasm32"))]
+			{
+				let window = Arc::new(create_window(event_loop));
+				let state = pollster::block_on(State::new(&window));
+				self.state = Some(state);
+			}
+			#[cfg(target_arch = "wasm32")]
+			{
+				if let Some(canvas) = self.canvas.take() {
+					let state = pollster::block_on(State::new(canvas, event_loop));
+					self.state = Some(state);
 				}
 			}
-			Event::AboutToWait => {
-				state.window().request_redraw();
-			}
-			_ => {}
 		}
-	});
-	result.unwrap();
+	}
+
+	fn window_event(
+		&mut self,
+		event_loop: &winit::event_loop::ActiveEventLoop,
+		window_id: winit::window::WindowId,
+		event: WindowEvent,
+	) {
+		if let Some(state) = &mut self.state {
+			if window_id == state.window().id() && !state.input(&event) {
+				match event {
+					WindowEvent::CloseRequested
+					| WindowEvent::KeyboardInput {
+						event:
+							KeyEvent {
+								state: ElementState::Pressed,
+								physical_key: PhysicalKey::Code(KeyCode::Escape),
+								..
+							},
+						..
+					} => event_loop.exit(),
+					WindowEvent::Resized(physical_size) => {
+						state.resize(physical_size);
+						state.window().request_redraw();
+					}
+					WindowEvent::RedrawRequested if window_id == state.window().id() => {
+						state.update();
+						match state.render() {
+							Ok(_) => {}
+							// Reconfigure the surface if it's lost or outdated
+							Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
+								state.resize(state.size)
+							}
+							// The system is out of memory, we should probably quit
+							Err(wgpu::SurfaceError::OutOfMemory) => event_loop.exit(),
+							// We're ignoring timeouts
+							Err(wgpu::SurfaceError::Timeout) => {
+								log::warn!("Surface timeout")
+							}
+							Err(err) => {
+								log::error!("Failed to render: {:?}", err);
+								event_loop.exit();
+							}
+						}
+					}
+					_ => {}
+				}
+			}
+		}
+	}
+
+	fn about_to_wait(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop) {
+		if let Some(state) = &self.state {
+			state.window().request_redraw();
+		}
+	}
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn run() {
 	init_logging();
 	let event_loop = EventLoop::new().unwrap();
-	let window = Arc::new(create_window(&event_loop));
-	let state = State::new(&window).await;
-	run_loop(state, event_loop)
+	let mut app = App { state: None };
+	event_loop.run_app(&mut app).unwrap();
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -624,14 +651,20 @@ pub async fn run() {
 		.and_then(|d| d.get_element_by_id("wasm-block"))
 		.map(|e| e.unchecked_into::<HtmlCanvasElement>())
 		.expect("Canvas not found");
-	let state = State::new(Arc::new(canvas), &event_loop).await;
-	run_loop(state, event_loop)
+	let mut app = App {
+		state: None,
+		canvas: Some(Arc::new(canvas)),
+	};
+	event_loop.run_app(&mut app).unwrap();
 }
 
 #[cfg(target_arch = "wasm32")]
 pub async fn run_with_canvas(canvas_arc: Arc<HtmlCanvasElement>) {
 	init_logging();
 	let event_loop = EventLoop::new().unwrap();
-	let state = State::new(canvas_arc, &event_loop).await;
-	run_loop(state, event_loop)
+	let mut app = App {
+		state: None,
+		canvas: Some(canvas_arc),
+	};
+	event_loop.run_app(&mut app).unwrap()
 }
